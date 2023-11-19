@@ -33,7 +33,7 @@ An implementation of DiT directly in Hugging Face `diffusers` can also be found 
 First, download and set up the repo:
 
 ```bash
-git clone https://github.com/facebookresearch/DiT.git
+git clone -b rgb https://github.com/Birch-san/DiT.git
 cd DiT
 ```
 
