@@ -14,6 +14,7 @@ import torch.nn as nn
 import numpy as np
 import math
 from timm.models.vision_transformer import PatchEmbed, Attention, Mlp
+from typing import Protocol
 
 
 def modulate(x, shift, scale):
@@ -325,6 +326,14 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
 #                                   DiT Configs                                  #
 #################################################################################
 
+class DiTFactory(Protocol):
+    @staticmethod
+    def __call__(**kwargs) -> DiT: ...
+
+def rgb_model_factory(func):
+    func.is_rgb_model_factory = True
+    return func
+
 def DiT_XL_2(**kwargs):
     return DiT(depth=28, hidden_size=1152, patch_size=2, num_heads=16, **kwargs)
 
@@ -352,6 +361,7 @@ def DiT_B_4(**kwargs):
 def DiT_B_8(**kwargs):
     return DiT(depth=12, hidden_size=768, patch_size=8, num_heads=12, **kwargs)
 
+@rgb_model_factory
 def DiT_RGB_B_4(**kwargs):
     return DiT(depth=12, hidden_size=768, patch_size=4, num_heads=12, in_channels=3, **kwargs)
 

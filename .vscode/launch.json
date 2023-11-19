@@ -1,0 +1,19 @@
+{
+  "configurations": [
+    {
+      "name": "Python: Train DiT-RGB-B/4",
+      "type": "python",
+      "request": "launch",
+      "module": "torch.distributed.launch",
+      "justMyCode": false,
+      "subProcess": true,
+      "args": [
+        "--nnodes=1",
+        "--nproc-per-node=1",
+        "train.py",
+        "--model", "DiT-RGB-B/4",
+        "--data-path", "/nvme1/ml-data/ImageNet/train"
+      ]
+    }
+  ]
+}
