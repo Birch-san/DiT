@@ -27,6 +27,8 @@ import argparse
 import logging
 import os
 from typing import Optional
+from torch.cuda.amp import autocast
+from contextlib import nullcontext
 
 from models import DiT_models, DiTFactory, DiT
 from diffusion import create_diffusion
@@ -195,6 +197,8 @@ def main(args):
     model.train()  # important! This enables embedding dropout for classifier-free guidance
     ema.eval()  # EMA model should always be in eval mode
 
+    amp_context = autocast(dtype=torch.bfloat16) if args.mixed_bf16 else nullcontext()
+
     # Variables for monitoring/logging purposes:
     train_steps = 0
     log_steps = 0
@@ -214,7 +218,8 @@ def main(args):
                     x = vae.encode(x).latent_dist.sample().mul_(0.18215)
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
             model_kwargs = dict(y=y)
-            loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
+            with amp_context:
+                loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
             loss = loss_dict["loss"].mean()
             opt.zero_grad()
             loss.backward()
@@ -277,5 +282,6 @@ if __name__ == "__main__":
     parser.add_argument("--log-every", type=int, default=100)
     parser.add_argument("--ckpt-every", type=int, default=50_000)
     parser.add_argument("--local-rank", type=int, default=0, help="unused; exposed for compatibility with (deprecated) torchrun launcher, `python -m torch.distributed.launch train.py`. entering torchrun via this entrypoint is a convenient way to get a debugger attached.")
+    parser.add_argument("--mixed-bf16", action='store_true', help="Enables bfloat16 mixed-precision. More intended for testing the trainer in low-memory environments.")
     args = parser.parse_args()
     main(args)

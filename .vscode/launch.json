@@ -12,7 +12,9 @@
         "--nproc-per-node=1",
         "train.py",
         "--model", "DiT-RGB-B/4",
-        "--data-path", "/nvme1/ml-data/ImageNet/train"
+        "--data-path", "/nvme1/ml-data/ImageNet/train",
+        "--global-batch-size", "8",
+        "--mixed-bf16",
       ]
     }
   ]
