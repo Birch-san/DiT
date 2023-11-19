@@ -363,7 +363,7 @@ def DiT_B_8(**kwargs):
 
 @rgb_model_factory
 def DiT_RGB_B_4(**kwargs):
-    return DiT(depth=12, hidden_size=768, patch_size=4, num_heads=12, in_channels=3, **kwargs)
+    return DiT(depth=12, hidden_size=768, patch_size=4, num_heads=12, in_channels=3, learn_sigma=False, **kwargs)
 
 def DiT_S_2(**kwargs):
     return DiT(depth=12, hidden_size=384, patch_size=2, num_heads=6, **kwargs)

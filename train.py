@@ -167,8 +167,8 @@ def main(args):
         model(x, t, y=y)
         logger.info(f"Forward pass GFLOPs: {fc.flops / 1_000_000_000:,.3f}")
 
+    diffusion = create_diffusion(timestep_respacing="", learn_sigma=model.learn_sigma)  # default: 1000 steps, linear noise schedule
     model = DDP(model, device_ids=[rank])
-    diffusion = create_diffusion(timestep_respacing="")  # default: 1000 steps, linear noise schedule
     if is_latent:
         vae: AutoencoderKL = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
     else:
