@@ -33,6 +33,8 @@ from contextlib import nullcontext
 from models import DiT_models, DiTFactory, DiT
 from diffusion import create_diffusion
 from diffusers.models import AutoencoderKL
+from diffusion.dit_flops import instrument_dit_flops
+from diffusion.flops import flop_counter
 
 
 #################################################################################
@@ -152,10 +154,20 @@ def main(args):
         input_size=input_size,
         num_classes=args.num_classes
     )
+    instrument_dit_flops(model)
     # Note that parameter initialization is done within the DiT constructor
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
     requires_grad(ema, False)
-    model = DDP(model.to(device), device_ids=[rank])
+
+    model.to(device)
+    with torch.no_grad(), flop_counter() as fc:
+        x = torch.zeros([1, model.x_embedder.proj.in_channels, args.image_size, args.image_size], device=device)
+        y = torch.zeros([1], dtype=torch.long, device=device)
+        t = torch.ones([1], device=device)
+        model(x, t, y=y)
+        logger.info(f"Forward pass GFLOPs: {fc.flops / 1_000_000_000:,.3f}")
+
+    model = DDP(model, device_ids=[rank])
     diffusion = create_diffusion(timestep_respacing="")  # default: 1000 steps, linear noise schedule
     if is_latent:
         vae: AutoencoderKL = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
@@ -272,7 +284,7 @@ if __name__ == "__main__":
     parser.add_argument("--data-path", type=str, required=True)
     parser.add_argument("--results-dir", type=str, default="results")
     parser.add_argument("--model", type=str, choices=list(DiT_models.keys()), default="DiT-XL/2")
-    parser.add_argument("--image-size", type=int, choices=[256, 512], default=256)
+    parser.add_argument("--image-size", type=int, choices=[128, 256, 512], default=256)
     parser.add_argument("--num-classes", type=int, default=1000)
     parser.add_argument("--epochs", type=int, default=1400)
     parser.add_argument("--global-batch-size", type=int, default=256)

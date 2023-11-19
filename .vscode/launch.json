@@ -13,6 +13,7 @@
         "train.py",
         "--model", "DiT-RGB-B/4",
         "--data-path", "/nvme1/ml-data/ImageNet/train",
+        "--image-size", "128",
         "--global-batch-size", "8",
         "--mixed-bf16",
       ]
