@@ -17,6 +17,8 @@ from download import find_model
 from models import DiT_models, DiTFactory, DiT
 from typing import Optional
 import argparse
+from torch.cuda.amp import autocast
+from contextlib import nullcontext
 
 
 def main(args):
@@ -68,10 +70,13 @@ def main(args):
     y = torch.cat([y, y_null], 0)
     model_kwargs = dict(y=y, cfg_scale=args.cfg_scale)
 
+    amp_context = autocast(dtype=torch.bfloat16) if args.mixed_bf16 else nullcontext()
+
     # Sample images:
-    samples = diffusion.p_sample_loop(
-        model.forward_with_cfg, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device=device
-    )
+    with amp_context:
+        samples = diffusion.p_sample_loop(
+            model.forward_with_cfg, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device=device
+        )
     samples, _ = samples.chunk(2, dim=0)  # Remove null class samples
     if is_latent:
         samples = vae.decode(samples / 0.18215).sample
