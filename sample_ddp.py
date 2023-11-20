@@ -13,7 +13,7 @@ For a simple single-GPU/CPU sampling script, see sample.py.
 """
 import torch
 import torch.distributed as dist
-from models import DiT_models
+from models import DiT_models, DiTFactory, DiT
 from download import find_model
 from diffusion import create_diffusion
 from diffusers.models import AutoencoderKL
@@ -23,6 +23,9 @@ from PIL import Image
 import numpy as np
 import math
 import argparse
+from torch.cuda.amp import autocast
+from contextlib import nullcontext
+from typing import Optional
 
 
 def create_npz_from_sample_folder(sample_dir, num=50_000):
@@ -65,9 +68,16 @@ def main(args):
         assert args.num_classes == 1000
 
     # Load model:
-    latent_size = args.image_size // 8
-    model = DiT_models[args.model](
-        input_size=latent_size,
+    model_factory: DiTFactory = DiT_models[args.model]
+    is_latent: bool = not getattr(model_factory, 'is_rgb_model_factory', False)
+    if is_latent:
+        assert args.image_size % 8 == 0, "Image size must be divisible by 8 (for the VAE encoder)."
+        input_size: int = args.image_size // 8
+    else:
+        input_size: int = args.image_size
+
+    model: DiT = model_factory(
+        input_size=input_size,
         num_classes=args.num_classes
     ).to(device)
     # Auto-download a pre-trained model or load a custom DiT checkpoint from train.py:
@@ -76,7 +86,10 @@ def main(args):
     model.load_state_dict(state_dict)
     model.eval()  # important!
     diffusion = create_diffusion(str(args.num_sampling_steps))
-    vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
+    if is_latent:
+        vae: AutoencoderKL = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
+    else:
+        vae: Optional[AutoencoderKL] = None
     assert args.cfg_scale >= 1.0, "In almost all cases, cfg_scale be >= 1.0"
     using_cfg = args.cfg_scale > 1.0
 
@@ -107,28 +120,32 @@ def main(args):
     total = 0
     for _ in pbar:
         # Sample inputs:
-        z = torch.randn(n, model.in_channels, latent_size, latent_size, device=device)
+        z = torch.randn(n, model.in_channels, input_size, input_size, device=device)
         y = torch.randint(0, args.num_classes, (n,), device=device)
 
         # Setup classifier-free guidance:
         if using_cfg:
             z = torch.cat([z, z], 0)
-            y_null = torch.tensor([1000] * n, device=device)
+            y_null = torch.tensor([args.num_classes] * n, device=device)
             y = torch.cat([y, y_null], 0)
             model_kwargs = dict(y=y, cfg_scale=args.cfg_scale)
             sample_fn = model.forward_with_cfg
         else:
             model_kwargs = dict(y=y)
             sample_fn = model.forward
+        
+        amp_context = autocast(dtype=torch.bfloat16) if args.mixed_bf16 else nullcontext()
 
         # Sample images:
-        samples = diffusion.p_sample_loop(
-            sample_fn, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
-        )
+        with amp_context:
+            samples = diffusion.p_sample_loop(
+                sample_fn, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
+            )
         if using_cfg:
             samples, _ = samples.chunk(2, dim=0)  # Remove null class samples
 
-        samples = vae.decode(samples / 0.18215).sample
+        if is_latent:
+            samples = vae.decode(samples / 0.18215).sample
         samples = torch.clamp(127.5 * samples + 128.0, 0, 255).permute(0, 2, 3, 1).to("cpu", dtype=torch.uint8).numpy()
 
         # Save samples to disk as individual .png files
@@ -153,7 +170,7 @@ if __name__ == "__main__":
     parser.add_argument("--sample-dir", type=str, default="samples")
     parser.add_argument("--per-proc-batch-size", type=int, default=32)
     parser.add_argument("--num-fid-samples", type=int, default=50_000)
-    parser.add_argument("--image-size", type=int, choices=[256, 512], default=256)
+    parser.add_argument("--image-size", type=int, choices=[128, 256, 512], default=256)
     parser.add_argument("--num-classes", type=int, default=1000)
     parser.add_argument("--cfg-scale",  type=float, default=1.5)
     parser.add_argument("--num-sampling-steps", type=int, default=250)
@@ -162,5 +179,7 @@ if __name__ == "__main__":
                         help="By default, use TF32 matmuls. This massively accelerates sampling on Ampere GPUs.")
     parser.add_argument("--ckpt", type=str, default=None,
                         help="Optional path to a DiT checkpoint (default: auto-download a pre-trained DiT-XL/2 model).")
+    parser.add_argument("--local-rank", type=int, default=0, help="unused; exposed for compatibility with (deprecated) torchrun launcher, `python -m torch.distributed.launch train.py`. entering torchrun via this entrypoint is a convenient way to get a debugger attached.")
+    parser.add_argument("--mixed-bf16", action='store_true', help="Enables bfloat16 mixed-precision. More intended for testing in low-memory environments.")
     args = parser.parse_args()
     main(args)
