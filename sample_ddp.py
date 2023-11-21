@@ -19,14 +19,20 @@ from diffusion import create_diffusion
 from diffusers.models import AutoencoderKL
 from tqdm import tqdm
 import os
+from os import makedirs
 from PIL import Image
 import numpy as np
 import math
 import argparse
 from torch.cuda.amp import autocast
 from contextlib import nullcontext
-from typing import Optional
+from typing import Optional, TypedDict
 
+
+SinkOutput = TypedDict('SinkOutput', {
+    '__key__': str,
+    'img.png': Image.Image,
+})
 
 def create_npz_from_sample_folder(sample_dir, num=50_000):
     """
@@ -43,6 +49,28 @@ def create_npz_from_sample_folder(sample_dir, num=50_000):
     np.savez(npz_path, arr_0=samples)
     print(f"Saved .npz file to {npz_path} [shape={samples.shape}].")
     return npz_path
+
+def create_wds_from_sample_folder(sample_dir: str, num=50_000) -> str:
+    """
+    Builds a directory of wds .tar files from a folder of .png samples.
+    """
+    from webdataset import ShardWriter
+    out_root = f'{sample_dir}/wds'
+    makedirs(out_root, exist_ok=True)
+    sink_ctx = ShardWriter(f'{out_root}/%05d.tar', maxcount=10000)
+    out_count = 0
+    with sink_ctx as sink:
+        for i in tqdm(range(num), desc="Building wds dataset from samples"):
+            sample_pil = Image.open(f"{sample_dir}/{i:06d}.png")
+            out: SinkOutput = {
+                '__key__': f'{i:06d}',
+                'img.png': sample_pil,
+            }
+            sink.write(out)
+            out_count += 1
+    print(f"Saved directory of wds .tar shards to {out_root}.")
+    assert out_count == num, f"Wanted to write {num} samples, but wrote only {out_count}."
+    return out_root
 
 
 def main(args):
@@ -157,7 +185,10 @@ def main(args):
     # Make sure all processes have finished saving their samples before attempting to convert to .npz
     dist.barrier()
     if rank == 0:
-        create_npz_from_sample_folder(sample_folder_dir, args.num_fid_samples)
+        if args.output_npz:
+            create_npz_from_sample_folder(sample_folder_dir, args.num_fid_samples)
+        if args.output_wds:
+            create_wds_from_sample_folder(sample_folder_dir, args.num_fid_samples)
         print("Done.")
     dist.barrier()
     dist.destroy_process_group()
@@ -181,5 +212,7 @@ if __name__ == "__main__":
                         help="Optional path to a DiT checkpoint (default: auto-download a pre-trained DiT-XL/2 model).")
     parser.add_argument("--local-rank", type=int, default=0, help="unused; exposed for compatibility with (deprecated) torchrun launcher, `python -m torch.distributed.launch train.py`. entering torchrun via this entrypoint is a convenient way to get a debugger attached.")
     parser.add_argument("--mixed-bf16", action='store_true', help="Enables bfloat16 mixed-precision. More intended for testing in low-memory environments.")
+    parser.add_argument("--output-wds", action='store_true', help="whether to collate samples into wds .tar shards")
+    parser.add_argument("--output-npz", action=argparse.BooleanOptionalAction, default=True, help="whether to stack the samples into one looong tensor and export it as .npz")
     args = parser.parse_args()
     main(args)
